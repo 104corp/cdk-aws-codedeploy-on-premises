@@ -13,7 +13,10 @@
     "lint-fix": "tsc --noEmit && eslint \"**/*.ts\" --quiet --fix",
     "watch": "tsc -w",
     "test": "jest",
-    "test-coverage": "jest --coverage --verbose"
+    "test-coverage": "jest --coverage --verbose",
+    "preversion": "npm run lint",
+    "version": "git add -A .",
+    "postversion": "git push && git push --tags"
   },
   "keywords": [
     "aws",

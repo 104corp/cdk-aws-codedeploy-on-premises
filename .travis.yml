@@ -1,0 +1,23 @@
+language: node_js
+os: linux
+dist: bionic
+arch: arm64-graviton2
+
+node_js: 12
+cache:
+  npm: true
+
+env:
+  global:
+    AWS_DEFAULT_REGION: ap-northeast-1
+
+install:
+  - make install
+
+script:
+  - make lint
+  - make test
+  - make build
+
+notifications:
+  email: false

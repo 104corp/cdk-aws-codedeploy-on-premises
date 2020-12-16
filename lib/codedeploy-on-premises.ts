@@ -1,12 +1,14 @@
 import * as codedeploy from '@aws-cdk/aws-codedeploy';
+import { CfnDeploymentGroup } from '@aws-cdk/aws-codedeploy';
 import * as iam from '@aws-cdk/aws-iam';
 import { ManagedPolicy } from '@aws-cdk/aws-iam';
 import * as lambda from '@aws-cdk/aws-lambda';
 import * as s3 from '@aws-cdk/aws-s3';
 import * as sns from '@aws-cdk/aws-sns';
 import * as subscriptions from '@aws-cdk/aws-sns-subscriptions';
+import * as cfn_inc from '@aws-cdk/cloudformation-include';
 import * as cdk from '@aws-cdk/core';
-import { Aws, CfnOutput, Tags } from '@aws-cdk/core';
+import { Aws, CfnOutput, CfnResource, Tags } from '@aws-cdk/core';
 import * as path from 'path';
 
 export interface DeploymentGroups {
@@ -43,12 +45,20 @@ export interface CodeDeployOnPremisesProps {
    * Define CDK-StackOwner Tag name
    */
   readonly owner?: string;
+
+  /**
+   * Automatic register instance on premises
+   * It's base on AWS CloudFormation templates
+   * Reference https://github.com/aws-cloudformation/aws-cloudformation-resource-providers-awsutilities-commandrunner/tree/master/docs#role
+   */
+  readonly autoRegisterInstance?: boolean;
 }
 
 export class CodeDeployOnPremises extends cdk.Construct {
   private readonly projectName: string;
   private readonly projectStage: string;
   private readonly owner: string;
+  private commands = 'set -xe';
 
   constructor(
     scope: cdk.Construct,
@@ -81,6 +91,7 @@ export class CodeDeployOnPremises extends cdk.Construct {
 
     const application = this.createCodeDeployApplication();
 
+    let lastDeploymentGroup: CfnDeploymentGroup | undefined = undefined;
     // Create CodeDeployUsers and DeploymentGroups
     onPremGroups.forEach((onPremGroup: DeploymentGroups) => {
       const instanceNames: string[] = [];
@@ -97,7 +108,7 @@ export class CodeDeployOnPremises extends cdk.Construct {
         );
       });
 
-      this.createDeploymentGroup(
+      lastDeploymentGroup = this.createDeploymentGroup(
         onPremGroup.name,
         application.applicationName,
         codeDeployRole.roleArn,
@@ -105,6 +116,13 @@ export class CodeDeployOnPremises extends cdk.Construct {
         deploymentEventTopic?.topicArn
       );
     });
+
+    if (props?.autoRegisterInstance === undefined || props?.autoRegisterInstance) {
+      const commandRunner = this.addCommandRunner();
+      if (lastDeploymentGroup) {
+        commandRunner.addDependsOn(lastDeploymentGroup);
+      }
+    }
   }
 
   createDeploymentBucket(): s3.Bucket {
@@ -155,6 +173,8 @@ export class CodeDeployOnPremises extends cdk.Construct {
     new CfnOutput(this, `Register-OnPrem-Cli-${instanceName}`, {
       value: `aws deploy register --instance-name ${instanceName} --iam-user-arn ${user.userArn} --tags Key=Name,Value=${instanceName} --region ${Aws.REGION}`,
     });
+  
+    this.commands += ` && aws deploy register --instance-name ${instanceName} --iam-user-arn ${user.userArn} --tags Key=Name,Value=${instanceName} --region ${Aws.REGION} > /command-output.txt`;
   }
 
   createCodeDeployRole(): iam.Role {
@@ -196,7 +216,7 @@ export class CodeDeployOnPremises extends cdk.Construct {
     codeDeployRoleArn: string,
     instances: string[],
     deploymentEventTopicArn: string | undefined
-  ): void {
+  ): CfnDeploymentGroup {
     const deploymentGroup = new codedeploy.CfnDeploymentGroup(
       this,
       `CodeDeployDeploymentGroup-${groupName}`,
@@ -236,6 +256,8 @@ export class CodeDeployOnPremises extends cdk.Construct {
     new CfnOutput(this, `CodeDeployDeploymentGroupName-${groupName}`, {
       value: deploymentGroup.deploymentGroupName as string,
     });
+
+    return deploymentGroup;
   }
 
   createDeploymentEventTopic(): sns.Topic {
@@ -270,5 +292,46 @@ export class CodeDeployOnPremises extends cdk.Construct {
     Tags.of(scope).add('CDK-StackOwner', this.owner);
     Tags.of(scope).add('CDK-CfnStackId', Aws.STACK_ID);
     Tags.of(scope).add('CDK-CfnStackName', Aws.STACK_NAME);
+  }
+
+  addCommandRunner(): CfnResource {
+    const runCommandRole = this.createRunCommandRole();
+
+    const template = new cfn_inc.CfnInclude(this, 'AddCommandRunner', {
+      templateFile: `${__dirname}/../template/command-runner.yml`,
+      preserveLogicalIds: false,
+      parameters: {
+        CommandRole: runCommandRole.roleName,
+        Command: this.commands,
+      }
+    });
+
+    return template.getResource('Command') as CfnResource;
+  }
+
+  createRunCommandRole(): iam.Role {
+    const runCommandRole = new iam.Role(this, 'EC2RunCommandRole', {
+      roleName: `${this.projectName}-${this.projectStage}-EC2RunCommandRole`,
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      inlinePolicies: {
+        'EC2RunCommandRole': new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              actions: ['codedeploy:RegisterOnPremisesInstance', 'codedeploy:DeregisterOnPremisesInstance'],
+              resources: [
+                `arn:aws:codedeploy:::instance:${this.projectName}-${this.projectStage}-*`,
+              ],
+            }),
+          ],
+        }),
+      },
+    });
+
+    new iam.CfnInstanceProfile(this, 'EC2RunCommandRoleInstanceProfile', {
+      roles: [runCommandRole.roleName],
+      instanceProfileName: `${this.projectName}-${this.projectStage}-EC2RunCommandRole`,
+    });
+
+    return runCommandRole;
   }
 }

@@ -317,10 +317,8 @@ export class CodeDeployOnPremises extends cdk.Construct {
         'EC2RunCommandRole': new iam.PolicyDocument({
           statements: [
             new iam.PolicyStatement({
-              actions: ['codedeploy:RegisterOnPremisesInstance', 'codedeploy:DeregisterOnPremisesInstance'],
-              resources: [
-                `arn:aws:codedeploy:::instance:${this.projectName}-${this.projectStage}-*`,
-              ],
+              actions: ['codedeploy:RegisterOnPremisesInstance'],
+              resources: ['*'],
             }),
           ],
         }),

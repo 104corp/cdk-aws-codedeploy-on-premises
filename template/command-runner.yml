@@ -1,0 +1,15 @@
+Parameters:
+  CommandRole:
+    Type: String
+    Description: 'https://github.com/aws-cloudformation/aws-cloudformation-resource-providers-awsutilities-commandrunner#role'
+
+  Command:
+    Type: String
+    Description: 'https://github.com/aws-cloudformation/aws-cloudformation-resource-providers-awsutilities-commandrunner#command'
+
+Resources:
+  Command:
+    Type: 'AWSUtility::CloudFormation::CommandRunner'
+    Properties:
+      Command: !Ref Command
+      Role: !Ref CommandRole
